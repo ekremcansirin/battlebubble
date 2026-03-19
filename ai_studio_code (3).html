@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pro Bubble Challenge</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; touch-action: none; }
+        
+        #ui-layer {
+            position: fixed; top: 20px; left: 20px; right: 20px;
+            display: flex; justify-content: space-between;
+            pointer-events: none; z-index: 10;
+        }
+
+        .stats {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 20px; border-radius: 12px;
+            border: 2px solid #333; font-weight: bold; font-size: 20px; color: #333;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        #game-over {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 100; text-align: center;
+        }
+
+        #game-over h1 { font-size: 48px; color: #333; margin-bottom: 10px; }
+        #game-over p { font-size: 24px; color: #666; margin: 5px 0; }
+        #game-over .final-score { font-size: 64px; color: #4CAF50; margin: 20px 0; font-weight: 900; }
+        
+        #restart-btn {
+            padding: 15px 40px; font-size: 20px; font-weight: bold;
+            background: #333; color: white; border: none; border-radius: 30px;
+            cursor: pointer; transition: transform 0.2s; margin-top: 30px; pointer-events: auto;
+        }
+        #restart-btn:hover { transform: scale(1.1); }
+
+        canvas { display: block; cursor: crosshair; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="click-counter" class="stats">Clicks Left: 50</div>
+        <div id="score-board" class="stats">Score: 0</div>
+    </div>
+
+    <div id="game-over">
+        <h1>Oyun Bitti!</h1>
+        <p>Final Skorun</p>
+        <div class="final-score" id="last-score">0</div>
+        <p id="best-score-text">Best Score: 0</p>
+        <button id="restart-btn" onclick="resetGame()">Tekrar Dene</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score-board');
+        const clickElement = document.getElementById('click-counter');
+        const gameOverScreen = document.getElementById('game-over');
+        const lastScoreElement = document.getElementById('last-score');
+        const bestScoreElement = document.getElementById('best-score-text');
+
+        let score = 0;
+        let clicksLeft = 50;
+        let bubbles = [];
+        let floatingTexts = [];
+        let isGameOver = false;
+        let bestScore = localStorage.getItem('bubbleBestScore') || 0;
+        
+        let bucket = { x: 0, y: 0, width: 130, height: 60, speed: 6, direction: 1 };
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            bucket.y = canvas.height - 80;
+            bucket.x = canvas.width / 2 - bucket.width / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Bubble {
+            constructor(x, y) {
+                this.x = x;
+                this.startY = y;
+                this.y = y;
+                this.radius = 25;
+                this.speedY = 1;
+                this.gravity = 0.25;
+                this.isFireball = Math.random() < 0.15;
+                this.hue = Math.random() * 360;
+            }
+
+            draw() {
+                ctx.save();
+                if (this.isFireball) {
+                    let grad = ctx.createRadialGradient(this.x, this.y, 2, this.x, this.y, this.radius + 15);
+                    grad.addColorStop(0, '#fff');
+                    grad.addColorStop(0.2, '#ffaa00');
+                    grad.addColorStop(0.5, '#ff4500');
+                    grad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = grad;
+                    ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 12, 0, Math.PI * 2); ctx.fill();
+                } else {
+                    let grad = ctx.createRadialGradient(this.x - 8, this.y - 8, 3, this.x, this.y, this.radius);
+                    grad.addColorStop(0, `hsl(${this.hue}, 100%, 90%)`);
+                    grad.addColorStop(0.4, `hsl(${this.hue}, 80%, 60%)`);
+                    grad.addColorStop(1, `hsl(${this.hue}, 100%, 20%)`);
+                    ctx.fillStyle = grad;
+                    ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            update() {
+                this.speedY += this.gravity;
+                this.y += this.speedY;
+            }
+        }
+
+        function drawAreaLines() {
+            ctx.save();
+            ctx.font = "14px Arial";
+            for (let i = 0; i <= 10; i++) {
+                let h = canvas.height - (i * (canvas.height / 10));
+                ctx.strokeStyle = i === 1 ? "rgba(255,0,0,0.3)" : "rgba(0,0,0,0.1)";
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(canvas.width, h); ctx.stroke();
+                ctx.fillStyle = "rgba(0,0,0,0.3)";
+                ctx.fillText(i * 10 + "%", 5, h - 5);
+            }
+            ctx.restore();
+        }
+
+        function handleScore(bubble) {
+            let points = 0;
+            let percent = ((canvas.height - bubble.startY) / canvas.height) * 100;
+
+            if (bubble.isFireball) {
+                points = 200;
+            } else {
+                if (percent <= 10) points = 50;
+                else points = Math.floor(percent / 10) * 2;
+            }
+
+            score += points;
+            scoreElement.innerText = `Score: ${score}`;
+            floatingTexts.push({
+                x: bucket.x + bucket.width / 2, y: bucket.y,
+                text: "+" + points, opacity: 1,
+                color: bubble.isFireball ? "#e67e22" : "#27ae60"
+            });
+        }
+
+        function checkGameOver() {
+            if (clicksLeft === 0 && bubbles.length === 0 && !isGameOver) {
+                isGameOver = true;
+                if (score > bestScore) {
+                    bestScore = score;
+                    localStorage.setItem('bubbleBestScore', bestScore);
+                }
+                setTimeout(() => {
+                    lastScoreElement.innerText = score;
+                    bestScoreElement.innerText = `Best Score: ${bestScore}`;
+                    gameOverScreen.style.display = 'flex';
+                }, 800);
+            }
+        }
+
+        function resetGame() {
+            score = 0;
+            clicksLeft = 50;
+            bubbles = [];
+            floatingTexts = [];
+            isGameOver = false;
+            scoreElement.innerText = "Score: 0";
+            clickElement.innerText = "Clicks Left: 50";
+            gameOverScreen.style.display = 'none';
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawAreaLines();
+            
+            // Kova
+            if (!isGameOver) {
+                bucket.x += bucket.speed * bucket.direction;
+                if (bucket.x + bucket.width > canvas.width || bucket.x < 0) bucket.direction *= -1;
+            }
+            
+            ctx.fillStyle = "#333";
+            ctx.beginPath();
+            ctx.moveTo(bucket.x, bucket.y); ctx.lineTo(bucket.x+bucket.width, bucket.y);
+            ctx.lineTo(bucket.x+bucket.width-20, bucket.y+bucket.height); ctx.lineTo(bucket.x+20, bucket.y+bucket.height);
+            ctx.closePath(); ctx.fill();
+
+            // Balonlar
+            for (let i = bubbles.length - 1; i >= 0; i--) {
+                bubbles[i].update();
+                bubbles[i].draw();
+
+                if (bubbles[i].y + bubbles[i].radius > bucket.y && 
+                    bubbles[i].y < bucket.y + bucket.height &&
+                    bubbles[i].x > bucket.x && bubbles[i].x < bucket.x + bucket.width) {
+                    handleScore(bubbles[i]);
+                    bubbles.splice(i, 1);
+                } else if (bubbles[i].y > canvas.height + 50) {
+                    bubbles.splice(i, 1);
+                }
+            }
+
+            // Puan metinleri
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                let ft = floatingTexts[i];
+                ctx.fillStyle = ft.color;
+                ctx.globalAlpha = ft.opacity;
+                ctx.font = "bold 26px Arial";
+                ctx.fillText(ft.text, ft.x, ft.y);
+                ft.y -= 2; ft.opacity -= 0.02;
+                if (ft.opacity <= 0) floatingTexts.splice(i, 1);
+            }
+            ctx.globalAlpha = 1;
+
+            checkGameOver();
+            requestAnimationFrame(animate);
+        }
+
+        function createBubble(e) {
+            if (isGameOver || clicksLeft <= 0) return;
+
+            const x = (e.clientX || (e.touches && e.touches[0].clientX));
+            const y = (e.clientY || (e.touches && e.touches[0].clientY));
+            
+            if (x && y) {
+                bubbles.push(new Bubble(x, y));
+                clicksLeft--;
+                clickElement.innerText = `Clicks Left: ${clicksLeft}`;
+            }
+        }
+
+        window.addEventListener('mousedown', createBubble);
+        window.addEventListener('touchstart', (e) => { 
+            if(e.target.id !== 'restart-btn') e.preventDefault(); 
+            createBubble(e); 
+        }, { passive: false });
+
+        animate();
+    </script>
+</body>
+</html>
